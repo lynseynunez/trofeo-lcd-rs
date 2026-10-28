@@ -49,16 +49,18 @@ pub enum Kind {
     Fans,
     MbTemp,
     DiskTemp,
+    /// One headline from `ticker_source` per card, changing every `tiles_news_seconds`.
+    News,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 21] = [
+    pub const ALL: [Kind; 22] = [
         Kind::Clock, Kind::Cpu, Kind::CpuTemp, Kind::CpuWatt, Kind::Gpu, Kind::GpuTemp, Kind::GpuHotspot, Kind::GpuWatt,
         Kind::Ram, Kind::Net, Kind::Disk, Kind::Fps, Kind::Weather, Kind::Music,
-        Kind::CpuFan, Kind::CaseFan, Kind::Pump, Kind::GpuFan, Kind::Fans, Kind::MbTemp, Kind::DiskTemp,
+        Kind::CpuFan, Kind::CaseFan, Kind::Pump, Kind::GpuFan, Kind::Fans, Kind::MbTemp, Kind::DiskTemp, Kind::News,
     ];
     pub const NAMES: &'static str =
-        "clock, cpu, cpu_temp, cpu_watt, gpu, gpu_temp, gpu_hotspot, gpu_watt, ram, net, disk, fps, weather, music, cpu_fan, case_fan, pump, gpu_fan, fans, mb_temp, disk_temp";
+        "clock, cpu, cpu_temp, cpu_watt, gpu, gpu_temp, gpu_hotspot, gpu_watt, ram, net, disk, fps, weather, music, cpu_fan, case_fan, pump, gpu_fan, fans, mb_temp, disk_temp, news";
 
     pub fn key(self) -> &'static str {
         match self {
@@ -83,6 +85,7 @@ impl Kind {
             Kind::Fans => "fans",
             Kind::MbTemp => "mb_temp",
             Kind::DiskTemp => "disk_temp",
+            Kind::News => "news",
         }
     }
 
@@ -114,6 +117,7 @@ impl Kind {
             "fans" | "ventole" => Kind::Fans,
             "mb_temp" | "mbtemp" | "board_temp" | "motherboard" | "scheda_madre" => Kind::MbTemp,
             "disk_temp" | "disktemp" | "ssd_temp" | "nvme_temp" => Kind::DiskTemp,
+            "news" | "headlines" | "headline" | "notizie" => Kind::News,
             _ => return None,
         })
     }
@@ -211,6 +215,10 @@ pub struct Settings {
     pub palette_interval: u32,
     /// 0-100: how far apart in time the tiles change preset (0 = all together).
     pub palette_stagger: u32,
+    /// `news` tile: how many of the latest headlines it cycles through (one card each).
+    pub news_cards: u32,
+    /// `news` tile: seconds each headline card stays on screen.
+    pub news_seconds: u32,
 }
 
 impl Default for Settings {
@@ -243,6 +251,8 @@ impl Default for Settings {
             fill_palettes: Vec::new(),
             palette_interval: 20,
             palette_stagger: 50,
+            news_cards: 5,
+            news_seconds: 10,
         }
     }
 }
@@ -423,6 +433,12 @@ pub fn parse(file: &ConfigFile) -> anyhow::Result<Settings> {
     if let Some(v) = num("tiles_palette_stagger", 0, 100)? {
         s.palette_stagger = v;
     }
+    if let Some(v) = num("tiles_news_cards", 1, 30)? {
+        s.news_cards = v;
+    }
+    if let Some(v) = num("tiles_news_seconds", 2, 3600)? {
+        s.news_seconds = v;
+    }
     Ok(s)
 }
 
@@ -517,7 +533,7 @@ fn smooth_step(t: f32) -> f32 {
 pub type Rect = (u32, u32, u32, u32);
 
 fn weight(kind: Kind) -> f32 {
-    if kind == Kind::Clock || kind == Kind::Weather || kind == Kind::Music {
+    if kind == Kind::Clock || kind == Kind::Weather || kind == Kind::Music || kind == Kind::News {
         1.5
     } else {
         1.0
@@ -979,6 +995,8 @@ struct TileView {
     foot: Vec<String>,
     /// The fans of the `fans` tile: (name, rpm).
     fans: Vec<(String, u32)>,
+    /// The `news` tile: (index of the card shown, number of cards).
+    page: Option<(usize, usize)>,
 }
 
 fn rate(kb: f64) -> (String, &'static str) {
@@ -996,6 +1014,18 @@ fn rpm_foot(hw: &lhm::Readings) -> Vec<String> {
         .filter_map(|(l, r)| r.map(|r| format!("{l} {r}")))
         .collect();
     (1..=parts.len()).rev().map(|n| format!("{} RPM", parts[..n].join(" / "))).collect()
+}
+
+/// Which headline the `news` tile shows at unix time `ts`: (index, number of cards), `None`
+/// while there are no headlines. The card follows the wall clock, so it keeps moving on
+/// while another screen is up and the next visit goes on with the next headline.
+fn news_card(items: usize, s: &Settings, ts: i64) -> (Option<usize>, usize) {
+    let total = items.min(s.news_cards as usize);
+    if total == 0 {
+        return (None, 0);
+    }
+    let step = ts.max(0) as u64 / s.news_seconds.max(1) as u64;
+    (Some((step % total as u64) as usize), total)
 }
 
 fn view(spec: TileSpec, d: &WidgetData, s: &Settings, now: &chrono::DateTime<Local>) -> TileView {
@@ -1017,6 +1047,7 @@ fn view(spec: TileSpec, d: &WidgetData, s: &Settings, now: &chrono::DateTime<Loc
         icon: None,
         foot: Vec::new(),
         fans: Vec::new(),
+        page: None,
     };
     let hw = lhm::current();
     match spec.kind {
@@ -1169,6 +1200,17 @@ fn view(spec: TileSpec, d: &WidgetData, s: &Settings, now: &chrono::DateTime<Loc
             v.label = tr.now_playing.to_string();
             v.value = d.now_playing.clone().unwrap_or_else(|| "-".into());
         }
+        Kind::News => {
+            v.label = tr.news.to_string();
+            let (idx, total) = news_card(d.ticker.len(), s, now.timestamp());
+            match idx {
+                Some(i) => {
+                    v.value = d.ticker[i].clone();
+                    v.page = Some((i, total));
+                }
+                None => v.value = "--".into(),
+            }
+        }
         Kind::CpuFan | Kind::CaseFan | Kind::Pump | Kind::GpuFan => {
             let (label, rpm) = match spec.kind {
                 Kind::CpuFan => ("CPU FAN", hw.cpu_fan),
@@ -1259,6 +1301,7 @@ fn draw_tile(p: &mut Painter, pal: &Palette, s: &Settings, v: &TileView, rect: R
         Kind::Clock => draw_clock(p, &look, v, (x, y, w, h)),
         Kind::Weather => draw_weather(p, &look, v, (x, y, w, h)),
         Kind::Music => draw_music(p, &look, v, (x, y, w, h)),
+        Kind::News => draw_news(p, &look, v, (x, y, w, h)),
         Kind::Fans => draw_fans(p, &look, s, v, (x, y, w, h), color_mode),
         _ => match (v.look, v.frac) {
             (Look::Ring, Some(f)) => draw_ring(p, &look, s, v, f, (x, y, w, h), color_mode),
@@ -1516,6 +1559,82 @@ fn draw_music(p: &mut Painter, look: &Look2, v: &TileView, (x, y, w, h): (f32, f
     }
     let (top, bottom) = (lbase + pad * 0.5, y + h - pad);
     p.text(x + pad, top + ((bottom - top) + cap) / 2.0, &title, cap, W::Regular, look.text, 255);
+}
+
+/// Greedy word wrap: the lines `text` breaks into when each may be `max_w` wide.
+fn wrap_words(p: &Painter, text: &str, cap: f32, w: W, max_w: f32) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        if cur.is_empty() {
+            cur = word.to_string();
+            continue;
+        }
+        let trial = format!("{cur} {word}");
+        if p.width(&trial, cap, w) <= max_w {
+            cur = trial;
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur = word.to_string();
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// One headline per card: the label on the left, a dot per card on the right (the one shown
+/// is a longer pill), and the headline as large as fits, wrapped over as many lines as the
+/// card has room for.
+fn draw_news(p: &mut Painter, look: &Look2, v: &TileView, (x, y, w, h): (f32, f32, f32, f32)) {
+    let pad = pad_for(w, h) * 1.3;
+    let inner = w - 2.0 * pad;
+    let lcap = label_cap(h);
+    let lbase = y + pad + lcap;
+    let lab = if p.font == FontStyle::Smooth { W::Medium } else { W::Regular };
+    p.text(x + pad, lbase, &fit_label(p, &v.label, lcap, inner), lcap, lab, look.muted, 255);
+
+    if let Some((cur, total)) = v.page {
+        let r = (lcap * 0.3).max(3.0);
+        let gap = r * 1.2;
+        let widths: Vec<f32> = (0..total).map(|i| if i == cur { r * 4.0 } else { r * 2.0 }).collect();
+        let sum: f32 = widths.iter().sum::<f32>() + gap * total.saturating_sub(1) as f32;
+        let mut dx = x + w - pad - sum;
+        let cy = lbase - lcap * 0.5;
+        for (i, dw) in widths.iter().enumerate() {
+            let (rgb, a) = if i == cur { (look.text, 255) } else { (look.muted, 150) };
+            p.layer.fill_rrect_solid((dx, cy - r, *dw, r * 2.0), r, rgb, a);
+            dx += *dw + gap;
+        }
+    }
+
+    let top = lbase + pad * 0.9;
+    let avail = (y + h - pad - top).max(10.0);
+    let hw = if p.font == FontStyle::Smooth { W::Medium } else { W::Regular };
+    let mut cap = (h * 0.24).clamp(14.0, 60.0);
+    let mut lines = wrap_words(p, &v.value, cap, hw, inner);
+    while cap > 12.0 && lines.len() as f32 * cap * 1.38 > avail {
+        cap -= 2.0;
+        lines = wrap_words(p, &v.value, cap, hw, inner);
+    }
+    let line_h = cap * 1.38;
+    let max_lines = ((avail / line_h).floor() as usize).max(1);
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            while last.chars().count() > 3 && p.width(&format!("{last}..."), cap, hw) > inner {
+                last.pop();
+            }
+            *last = format!("{}...", last.trim_end());
+        }
+    }
+    let block = lines.len() as f32 * line_h;
+    let mut base = top + (avail - block) / 2.0 + cap;
+    for line in &lines {
+        p.text(x + pad, base, line, cap, hw, look.text, 255);
+        base += line_h;
+    }
 }
 
 // -------------------------------------------------------------------- screen
