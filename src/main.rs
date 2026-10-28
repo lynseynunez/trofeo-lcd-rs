@@ -2032,6 +2032,7 @@ fn main() -> anyhow::Result<()> {
     let mut tiles_screen = tiles::TilesScreen::new();
     let mut frame_screen = frame::FrameScreen::new();
     let mut dash_screen = tiles::dash::DashScreen::new();
+    let mut studio_screen = tiles::studio::StudioScreen::new();
     let Display { mut resolution, mut background, mut idle_fps_effective, mut composite, mut fb, mut ui } =
         build_display(&config)?;
     let _ = resolution;
@@ -2211,10 +2212,12 @@ fn main() -> anyhow::Result<()> {
             && !(gaming_now && ui_show.dashboard);
         // `deck`, `cards`, `orbit` (see `tiles/dash.rs`): the graphs move once a second.
         let dash_style = active_def.and_then(|d| tiles::dash::Style::from_layout(d.name)).filter(|_| is_idle && !(gaming_now && ui_show.dashboard));
+        let studio_style = active_def.and_then(|d| tiles::studio::Style::from_layout(d.name)).filter(|_| !(gaming_now && ui_show.dashboard) && !music_screen_on);
         let target_fps = match dash_style {
             Some(_) => target_fps.max(tiles::dash::DashScreen::wanted_fps(&opts().dash, config.ui.effect.fps as f32, config.active_fps)),
             None => target_fps,
         };
+        let target_fps = if studio_style.is_some() { target_fps.max(tiles::studio::StudioScreen::wanted_fps(config.active_fps)) } else { target_fps };
         let target_fps = if frame_wanted { target_fps.max(frame_screen.wanted_fps()) } else { target_fps };
         let target_fps = match (tiles_wanted, opts().tiles.bg) {
             (true, tiles::BgMode::Effect) => target_fps.max(config.ui.effect.wanted_fps() as f32),
@@ -2355,7 +2358,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         // Data of the panel layouts (also used by the tiles screen, which paints on `fb`).
-        let widget_data = (is_idle && active_def.is_some() && !(gaming_mode && ui_show.dashboard)).then(|| layouts::WidgetData {
+        let widget_data = ((is_idle || studio_style.is_some()) && active_def.is_some() && !(gaming_mode && ui_show.dashboard)).then(|| layouts::WidgetData {
             cpu_pct: sys.global_cpu_info().cpu_usage(),
             cpu_temp: latest_cpu_temp,
             cpu_power: latest_cpu_power,
@@ -2376,6 +2379,7 @@ fn main() -> anyhow::Result<()> {
         let tiles_now = tiles_wanted && widget_data.is_some();
         let frame_now = frame_wanted && widget_data.is_some();
         let dash_now = dash_style.filter(|_| widget_data.is_some());
+        let studio_now = studio_style.filter(|_| widget_data.is_some());
         // Base: a background (image/gif/video) or a solid color; the interface goes
         // on the `ui` buffer (transparent) when there are margins or a background.
         if composite {
@@ -2427,6 +2431,24 @@ fn main() -> anyhow::Result<()> {
             let o = opts();
             dash_screen.draw(&mut fb, area, style, wd, color_mode, &o.dash, &o.tiles, &env);
         }
+        if let (Some(style), Some(wd)) = (studio_now, widget_data.as_ref()) {
+            let area = if composite {
+                (config.margins.left, config.margins.top, ui.width(), ui.height())
+            } else {
+                (0, 0, fb.width(), fb.height())
+            };
+            let env = tiles::Env { fps: config.active_fps, ffmpeg: config.ffmpeg.as_deref(), effect: &config.ui.effect, secs: None };
+            let o = opts();
+            let grad: Vec<(u8, u8, u8)> = o
+                .spectrum_palettes
+                .iter()
+                .find_map(|p| match p {
+                    spectrum::Palette::Custom(c) => Some(c.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            studio_screen.draw(&mut fb, area, style, wd, &bar_heights, &o.tiles, &grad, &env);
+        }
         if let (true, Some(wd)) = (frame_now, widget_data.as_ref()) {
             let area = if composite {
                 (config.margins.left, config.margins.top, ui.width(), ui.height())
@@ -2463,6 +2485,8 @@ fn main() -> anyhow::Result<()> {
                 };
                 music.draw(target, t, &bar_heights, peak_tracker.peaks(), &opts());
             }
+        } else if studio_now.is_some() {
+            // the studio screens paint everything (spectrum included) on `fb` above
         } else if is_idle {
             if let (Some(def), Some(wd)) = (active_def, widget_data.as_ref()) {
                 layouts::draw_layout(target, def, wd, color_mode, &mut layout_marquee);

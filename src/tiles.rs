@@ -21,6 +21,7 @@ use std::path::PathBuf;
 type Rgb = (u8, u8, u8);
 
 pub mod dash;
+pub mod studio;
 
 // ------------------------------------------------------------------ settings
 

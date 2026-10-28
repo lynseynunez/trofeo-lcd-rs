@@ -130,6 +130,20 @@ pub const LAYOUTS: &[LayoutDef] = &[
         rows: &[],
     },
     LayoutDef {
+        name: "studio",
+        description: "The Trofeo Studio look: glass clock, big glass weather and a gradient spectrum flush with the bottom",
+        standard: false,
+        cols: 1,
+        rows: &[],
+    },
+    LayoutDef {
+        name: "studio-news",
+        description: "The Trofeo Studio look with one glass card per news headline (changes every tiles_news_seconds)",
+        standard: false,
+        cols: 1,
+        rows: &[],
+    },
+    LayoutDef {
         name: "deck",
         description: "Instrument columns: a live gauge, a big value, a graph and four readings per column (choose them with `deck = ...`)",
         standard: false,
