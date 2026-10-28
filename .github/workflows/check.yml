@@ -1,0 +1,18 @@
+name: Check
+
+on:
+  push:
+    branches: ["news-cards", "main"]
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check --all-targets
+      - name: cargo test (tiles, layouts)
+        run: cargo test --bin trofeo_lcd tiles
