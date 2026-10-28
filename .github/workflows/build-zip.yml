@@ -1,0 +1,30 @@
+name: Build zip
+
+on:
+  push:
+    branches: ["news-cards"]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binaries
+        run: cargo build --release --bins
+      - name: Assemble package
+        shell: bash
+        run: |
+          set -eu
+          out="trofeo-lcd-studio-windows"
+          mkdir -p "$out"
+          cp target/release/trofeo_lcd.exe target/release/trofeo_screen.exe target/release/trofeo_config.exe "$out/"
+          cp README.md NOTICE.md LICENSE OPTIONS_GUIDE.md trofeo.conf.example "$out/"
+          [ -d scripts ] && cp -r scripts "$out/"
+          true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trofeo-lcd-studio-windows
+          path: trofeo-lcd-studio-windows
