@@ -156,12 +156,39 @@ fn strip_cdata(s: &str) -> &str {
 }
 
 fn decode_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
+    // numeric entities first (&#039; &#39; &#x27;), then the named ones; `&amp;` last so that
+    // "&amp;#39;" is not decoded twice
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("&#") {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i + 2..];
+        let decoded = tail.find(';').filter(|e| *e <= 8).and_then(|e| {
+            let num = &tail[..e];
+            let code = match num.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                None => num.parse::<u32>().ok(),
+            };
+            code.and_then(char::from_u32).map(|c| (c, e))
+        });
+        match decoded {
+            Some((c, e)) => {
+                out.push(c);
+                rest = &tail[e + 1..];
+            }
+            None => {
+                out.push_str("&#");
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
-        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
 }
 
 fn truncate(s: &str) -> String {
